@@ -579,7 +579,9 @@ bool Gif::underCursor(bool fullFeatured) const {
 }
 
 bool Gif::autoplayEnabled() const {
-	if (_realParent->isSponsored()) {
+	if (_parent->context() == Context::MediaEditor) {
+		return false;
+	} else if (_realParent->isSponsored()) {
 		return true;
 	}
 	return Data::AutoDownload::ShouldAutoPlay(
@@ -629,6 +631,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	const auto sti = context.imageStyle();
 	const auto cornerDownload = downloadInCorner();
 	const auto autoplay = autoplayEligible(true);
+	const auto mediaEditor = (_parent->context() == Context::MediaEditor);
 	const auto activeRoundPlaying = activeRoundStreamed();
 
 	auto paintx = 0, painty = 0, paintw = width(), painth = height();
@@ -671,7 +674,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 
 	const auto inTTLViewer = _parent->delegate()->elementContext()
 		== Context::TTLViewer;
-	const auto revealed = revealedProgress();
+	const auto revealed = mediaEditor ? 1. : revealedProgress();
 	const auto fullHiddenBySpoiler = (revealed == 0.);
 	if (revealed < 1.) {
 		validateSpoilerImageCache(rthumb.size(), rounding);
@@ -706,6 +709,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 		: nullptr;
 
 	if (displayLoading
+		&& !mediaEditor
 		&& (!streamedForWaiting
 			|| item->isSending()
 			|| _data->uploading()
@@ -787,10 +791,10 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 		validateThumbCache({ usew, painth }, isRound, rounding);
 		p.drawImage(rthumb, _thumbCache);
 	}
-	if (isRound) {
+	if (isRound && !mediaEditor) {
 		paintRoundPlaybackProgress(p, context, rthumb, inTTLViewer);
 	}
-	if (!isRound) {
+	if (!isRound && !mediaEditor) {
 		paintTimestampMark(p, rthumb, rounding);
 	}
 
@@ -819,6 +823,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 
 	const auto ttlCovered = _ttlCover && (revealed < 1.);
 	const auto paintInCenter = !_sensitiveSpoiler
+		&& !mediaEditor
 		&& (radial
 			|| (!streamingMode
 				&& ((!loaded && !_data->loading()) || !autoplay))
@@ -897,7 +902,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			}
 		}
 		p.setOpacity(1.);
-	} else if (_sensitiveSpoiler) {
+	} else if (_sensitiveSpoiler && !mediaEditor) {
 		drawSpoilerTag(p, rthumb, context, [&] {
 			return spoilerTagBackground();
 		});
@@ -921,7 +926,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	if (!unwrapped && !skipDrawingSurrounding) {
 		const auto sponsoredSkip = !_data->isVideoFile()
 			&& _realParent->isSponsored();
-		if ((!isRound || !inWebPage) && !sponsoredSkip) {
+		if ((!isRound || !inWebPage) && !sponsoredSkip && !mediaEditor) {
 			if (ttlCovered) {
 				PaintTtlLabel(p, QPoint(), width(), _realParent, context);
 			} else {
@@ -929,7 +934,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			}
 		}
 	} else if (!skipDrawingSurrounding) {
-		if (isRound) {
+		if (isRound && !mediaEditor) {
 			const auto mediaUnread = item->hasUnreadMediaFlag();
 			const auto statusText = _seeking
 				? Ui::FormatDurationText(1 + int64(base::SafeRound(
@@ -1112,7 +1117,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			paintTranscribe(p, usex, fullBottom, false, context);
 		}
 	}
-	if (_drawTtl) {
+	if (_drawTtl && !mediaEditor) {
 		_drawTtl(p, rthumb, context);
 	}
 }
@@ -1768,6 +1773,7 @@ void Gif::drawGrouped(
 		not_null<QPixmap*> cache) const {
 	ensureDataMediaCreated();
 	const auto item = _parent->data();
+	const auto mediaEditor = (_parent->context() == Context::MediaEditor);
 	const auto loaded = dataLoaded();
 	const auto displayLoading = item->isSending()
 		|| item->hasFailed()
@@ -1777,7 +1783,7 @@ void Gif::drawGrouped(
 	_smallGroupPart = !fullFeaturedGrouped(sides);
 	const auto cornerDownload = !_smallGroupPart && downloadInCorner();
 
-	const auto revealed = revealedProgress();
+	const auto revealed = mediaEditor ? 1. : revealedProgress();
 	const auto fullHiddenBySpoiler = (revealed == 0.);
 	if (revealed < 1.) {
 		validateSpoilerImageCache(geometry.size(), rounding);
@@ -1808,6 +1814,7 @@ void Gif::drawGrouped(
 		: nullptr;
 
 	if (displayLoading
+		&& !mediaEditor
 		&& (!streamedForWaiting
 			|| item->isSending()
 			|| _data->uploading()
@@ -1884,6 +1891,7 @@ void Gif::drawGrouped(
 	}
 
 	const auto paintInCenter = !_sensitiveSpoiler
+		&& !mediaEditor
 		&& (radial
 			|| (!streamingMode
 				&& ((!loaded && !_data->loading()) || !autoplay)));
@@ -1968,7 +1976,7 @@ void Gif::drawGrouped(
 		}
 		p.setOpacity(1.);
 	}
-	if (!_smallGroupPart) {
+	if (!_smallGroupPart && !mediaEditor) {
 		drawCornerStatus(p, context, geometry.topLeft());
 	}
 }
@@ -2093,8 +2101,7 @@ bool Gif::needsBubble() const {
 		return false;
 	}
 	const auto item = _parent->data();
-	return item->repliesAreComments()
-		|| item->externalReply()
+	return _parent->hasCommentsButton()
 		|| item->viaBot()
 		|| !item->emptyText()
 		|| _parent->displayReply()
@@ -2711,6 +2718,7 @@ void Gif::ensureTranscribeButton() const {
 		&& (!media || !media->ttlSeconds())
 		&& !_parent->data()->isScheduled()
 		&& !_parent->data()->isAdminLogEntry()
+		&& (_parent->context() != Context::MediaEditor)
 		&& (_data->session().premium()
 			|| _data->session().api().transcribes().trialsSupport())) {
 		if (!_transcribe) {
