@@ -84,6 +84,7 @@ using namespace Settings;
 constexpr auto kFakeChannelId = ChannelId(0xFFFFFFF000ULL);
 constexpr auto kFakeWebPageId = WebPageId(0xFFFFFFFF00000000ULL);
 constexpr auto kUnsetColorIndex = uint8(0xFF);
+constexpr auto kLocallyPreviewProfileColors = true;
 
 base::unique_qptr<Ui::RpWidget> CreateEmptyPlaceholder(
 		not_null<Ui::RpWidget*> parent,
@@ -568,6 +569,19 @@ void Set(
 			std::move(request)
 		).done(done).fail(fail).send();
 	};
+	if (kLocallyPreviewProfileColors && peer->isSelf()) {
+		peer->session().data().saveLocalProfileAppearance(
+			(values.colorIndex == kUnsetColorIndex)
+				? std::nullopt
+				: std::make_optional(values.colorIndex),
+			values.backgroundEmojiId,
+			values.forProfile);
+		if (values.statusChanged) {
+			peer->setEmojiStatus(values.statusId, values.statusUntil);
+		}
+		done();
+		return;
+	}
 	if (peer->isSelf()) {
 		using Flag = MTPaccount_UpdateColor::Flag;
 		using ColorFlag = MTPDpeerColor::Flag;
@@ -623,7 +637,9 @@ void Set(
 bool ShowPremiumPreview(
 		std::shared_ptr<ChatHelpers::Show> show,
 		not_null<PeerData*> peer) {
-	if (!peer->isSelf() || show->session().premium()) {
+	if (kLocallyPreviewProfileColors
+		|| !peer->isSelf()
+		|| show->session().premium()) {
 		return false;
 	}
 	if (const auto controller = show->resolveWindow()) {
@@ -2091,7 +2107,9 @@ void EditPeerColorSection(
 				Data::AmPremiumValue(&peer->session())
 			) | rpl::map([=](const QString &text, bool premium) {
 				auto result = TextWithEntities();
-				if (!premium && peer->isSelf()) {
+				if (!kLocallyPreviewProfileColors
+					&& !premium
+					&& peer->isSelf()) {
 					result.append(Ui::Text::IconEmoji(&st::giftBoxLock));
 				}
 				result.append(text);
@@ -2365,7 +2383,9 @@ void EditPeerProfileColorSection(
 				Data::AmPremiumValue(&peer->session())
 			) | rpl::map([=](const QString &text, bool premium) {
 				auto result = TextWithEntities();
-				if (!premium && peer->isSelf()) {
+				if (!kLocallyPreviewProfileColors
+					&& !premium
+					&& peer->isSelf()) {
 					result.append(Ui::Text::IconEmoji(&st::giftBoxLock));
 				}
 				result.append(text);

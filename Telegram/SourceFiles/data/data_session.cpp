@@ -93,11 +93,136 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/random.h"
 #include "spellcheck/spellcheck_highlight_syntax.h"
 
+#include <QtCore/QBuffer>
+#include <QtCore/QDataStream>
+#include <QtGui/QImage>
+
 namespace Data {
 namespace {
 
 constexpr auto kNextForUpgradeGiftTimeout = 5 * crl::time(1000);
 constexpr auto kMaxServiceNotificationMessageSize = 4096;
+constexpr auto kLocalProfileAppearancePref = "local-profile-appearance-v1";
+constexpr auto kLocalDynamicAvatarPreviewPref = "local-dynamic-avatar-preview-v1";
+
+struct LocalProfileAppearance final {
+	bool present = false;
+	std::optional<uint8> colorIndex;
+	DocumentId backgroundEmojiId = 0;
+	std::optional<uint8> profileColorIndex;
+	DocumentId profileBackgroundEmojiId = 0;
+};
+
+[[nodiscard]] LocalProfileAppearance ReadLocalProfileAppearance(
+		not_null<Storage::Account*> local) {
+	auto result = LocalProfileAppearance();
+	const auto bytes = local->readPref<QByteArray>(
+		kLocalProfileAppearancePref);
+	if (bytes.isEmpty()) {
+		return result;
+	}
+	auto buffer = QBuffer();
+	buffer.setData(bytes);
+	if (!buffer.open(QIODevice::ReadOnly)) {
+		return result;
+	}
+	auto stream = QDataStream(&buffer);
+	auto version = quint32();
+	auto hasColorIndex = false;
+	auto colorIndex = quint8();
+	auto hasProfileColorIndex = false;
+	auto profileColorIndex = quint8();
+	auto backgroundEmojiId = qint64();
+	auto profileBackgroundEmojiId = qint64();
+	stream >> version
+		>> hasColorIndex
+		>> colorIndex
+		>> backgroundEmojiId
+		>> hasProfileColorIndex
+		>> profileColorIndex
+		>> profileBackgroundEmojiId;
+	if (stream.status() != QDataStream::Ok || version != 1) {
+		return LocalProfileAppearance();
+	}
+	result.present = true;
+	result.colorIndex = hasColorIndex
+		? std::make_optional(uint8(colorIndex))
+		: std::nullopt;
+	result.backgroundEmojiId = DocumentId(backgroundEmojiId);
+	result.profileColorIndex = hasProfileColorIndex
+		? std::make_optional(uint8(profileColorIndex))
+		: std::nullopt;
+	result.profileBackgroundEmojiId = DocumentId(profileBackgroundEmojiId);
+	return result;
+}
+
+void WriteLocalProfileAppearance(
+		not_null<Storage::Account*> local,
+		const LocalProfileAppearance &data) {
+	auto bytes = QByteArray();
+	auto buffer = QBuffer(&bytes);
+	buffer.open(QIODevice::WriteOnly);
+	auto stream = QDataStream(&buffer);
+	stream << quint32(1)
+		<< data.colorIndex.has_value()
+		<< quint8(data.colorIndex.value_or(0))
+		<< qint64(data.backgroundEmojiId)
+		<< data.profileColorIndex.has_value()
+		<< quint8(data.profileColorIndex.value_or(0))
+		<< qint64(data.profileBackgroundEmojiId);
+	if (stream.status() == QDataStream::Ok) {
+		local->writePref<QByteArray>(kLocalProfileAppearancePref, bytes);
+	}
+}
+
+[[nodiscard]] bool ApplyLocalProfileAppearance(
+		not_null<UserData*> user) {
+	if (!user->isSelf()) {
+		return false;
+	}
+	const auto data = ReadLocalProfileAppearance(&user->session().local());
+	if (!data.present) {
+		return false;
+	}
+	const auto colorChanged = data.colorIndex
+		? user->changeColorIndex(*data.colorIndex)
+		: user->clearColorIndex();
+	const auto backgroundChanged = user->changeBackgroundEmojiId(
+		data.backgroundEmojiId);
+	const auto profileColorChanged = data.profileColorIndex
+		? user->changeColorProfileIndex(*data.profileColorIndex)
+		: user->clearColorProfileIndex();
+	const auto profileBackgroundChanged = user->changeProfileBackgroundEmojiId(
+		data.profileBackgroundEmojiId);
+	return colorChanged
+		|| backgroundChanged
+		|| profileColorChanged
+		|| profileBackgroundChanged;
+}
+
+[[nodiscard]] bool ApplyLocalDynamicAvatarPreview(
+		not_null<UserData*> user) {
+	if (!user->isSelf()) {
+		return false;
+	}
+	const auto bytes = user->session().local().readPref<QByteArray>(
+		kLocalDynamicAvatarPreviewPref);
+	if (bytes.isEmpty()) {
+		return false;
+	}
+	auto image = QImage();
+	if (!image.loadFromData(bytes)) {
+		return false;
+	}
+	user->setUserpic(
+		base::RandomValue<PhotoId>(),
+		ImageLocation(
+			{ .data = InMemoryLocation{ .bytes = bytes } },
+			image.width(),
+			image.height()),
+		false);
+	return true;
+}
 
 using ViewElement = HistoryView::Element;
 
@@ -924,11 +1049,32 @@ not_null<UserData*> Session::processUser(const MTPUser &data) {
 			flags |= UpdateFlag::OnlineStatus;
 		}
 	}
+	if (ApplyLocalProfileAppearance(result)) {
+		flags |= UpdateFlag::Color | UpdateFlag::ColorProfile;
+	}
+	if (ApplyLocalDynamicAvatarPreview(result)) {
+		flags |= UpdateFlag::Photo;
+	}
 
 	if (flags) {
 		session().changes().peerUpdated(result, flags);
 	}
 	return result;
+}
+
+void Session::saveLocalProfileAppearance(
+		std::optional<uint8> colorIndex,
+		DocumentId backgroundEmojiId,
+		bool forProfile) {
+	auto data = ReadLocalProfileAppearance(&session().local());
+	if (forProfile) {
+		data.profileColorIndex = colorIndex;
+		data.profileBackgroundEmojiId = backgroundEmojiId;
+	} else {
+		data.colorIndex = colorIndex;
+		data.backgroundEmojiId = backgroundEmojiId;
+	}
+	WriteLocalProfileAppearance(&session().local(), data);
 }
 
 not_null<PeerData*> Session::processChat(const MTPChat &data) {

@@ -29,6 +29,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Api {
 namespace {
 
+constexpr auto kSponsoredMessagesDisabled = true;
+
 [[nodiscard]] GiftCode Parse(const MTPDpayments_checkedGiftCode &data) {
 	return {
 		.from = data.vfrom_id() ? peerFromMTP(*data.vfrom_id()) : PeerId(),
@@ -725,6 +727,9 @@ SponsoredToggle::SponsoredToggle(not_null<Main::Session*> session)
 }
 
 rpl::producer<bool> SponsoredToggle::toggled() {
+	if (kSponsoredMessagesDisabled) {
+		return rpl::single(false);
+	}
 	return [=](auto consumer) {
 		auto lifetime = rpl::lifetime();
 
@@ -740,6 +745,9 @@ rpl::producer<bool> SponsoredToggle::toggled() {
 }
 
 rpl::producer<rpl::no_value, QString> SponsoredToggle::setToggled(bool v) {
+	if (kSponsoredMessagesDisabled) {
+		v = false;
+	}
 	return [=](auto consumer) {
 		auto lifetime = rpl::lifetime();
 

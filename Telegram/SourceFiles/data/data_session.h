@@ -288,6 +288,10 @@ public:
 
 	not_null<UserData*> processUser(const MTPUser &data);
 	not_null<PeerData*> processChat(const MTPChat &data);
+	void saveLocalProfileAppearance(
+		std::optional<uint8> colorIndex,
+		DocumentId backgroundEmojiId,
+		bool forProfile);
 
 	// Returns last user, if there were any.
 	UserData *processUsers(const MTPVector<MTPUser> &data);

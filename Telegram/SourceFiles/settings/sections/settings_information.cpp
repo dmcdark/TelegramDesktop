@@ -55,6 +55,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "main/main_domain.h"
 #include "mtproto/mtproto_dc_options.h"
+#include "storage/storage_account.h"
 #include "window/window_session_controller.h"
 #include "window/window_controller.h"
 #include "window/window_peer_menu.h"
@@ -73,6 +74,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_window.h"
 
 #include <QtGui/QGuiApplication>
+#include <QtGui/QImage>
 #include <QtCore/QBuffer>
 
 namespace Settings {
@@ -96,6 +98,8 @@ struct InformationHighlightTargets {
 
 constexpr auto kSaveBioTimeout = 1000;
 constexpr auto kPlayStatusLimit = 2;
+constexpr auto kLocallyPreviewDynamicAvatars = true;
+constexpr auto kLocalDynamicAvatarPreviewPref = "local-dynamic-avatar-preview-v1";
 
 class ComposedBadge final : public Ui::RpWidget {
 public:
@@ -268,6 +272,14 @@ void SetupPhoto(
 		not_null<Window::SessionController*> controller,
 		not_null<UserData*> self,
 		InformationHighlightTargets *targets) {
+	const auto savedPreview = self->session().local().readPref<QByteArray>(
+		kLocalDynamicAvatarPreviewPref);
+	if (!savedPreview.isEmpty()) {
+		auto image = QImage();
+		if (image.loadFromData(savedPreview)) {
+			UpdatePhotoLocally(self, image);
+		}
+	}
 	const auto wrap = container->add(object_ptr<Ui::FixedHeightWidget>(
 		container,
 		st::settingsInfoPhotoHeight));
@@ -291,6 +303,19 @@ void SetupPhoto(
 		UpdatePhotoLocally(self, image);
 		photo->showCustom(base::duplicate(image));
 		const auto isMarkup = (chosen.markup.documentId != 0);
+		const auto isDynamic = isMarkup || (chosen.video != nullptr);
+		if (kLocallyPreviewDynamicAvatars && isDynamic) {
+			auto bytes = QByteArray();
+			auto buffer = QBuffer(&bytes);
+			if (buffer.open(QIODevice::WriteOnly)
+				&& image.save(&buffer, "PNG")) {
+				self->session().local().writePref<QByteArray>(
+					kLocalDynamicAvatarPreviewPref,
+					bytes);
+			}
+			return;
+		}
+		self->session().local().clearPref(kLocalDynamicAvatarPreviewPref);
 		self->session().api().peerPhoto().upload(
 			self,
 			{
